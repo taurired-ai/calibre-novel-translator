@@ -70,6 +70,7 @@ class TestFunction(unittest.TestCase):
             'novel_chunk_context': 'translated',
             'novel_source_context_paragraphs': 5,
             'novel_on_missing_paragraphs': 'stop',
+            'novel_ssl_retry_max': 5,
             'novel_rate_limit_max_wait': 600,
             'novel_reply_max_tokens': 16384,
             'novel_output_aware_chunking': True,

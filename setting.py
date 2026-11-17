@@ -1461,6 +1461,17 @@ class TranslationSetting(QDialog):
             _('Wait out rate limits for (seconds)'), novel_rate_limit)
         self.disable_wheel_event(novel_rate_limit)
 
+        novel_ssl_retries = QSpinBox()
+        novel_ssl_retries.setRange(0, 7)
+        novel_ssl_retries.setToolTip(_(
+            'Retry transient SSL/TLS connection failures such as '
+            '"bad record mac" without spending a normal request attempt. '
+            'Useful when a router or CDN block intermittently breaks HTTPS. '
+            'Retries use an increasing delay. Set to 0 to disable.'))
+        novel_layout.addRow(
+            _('Extra SSL/TLS retries'), novel_ssl_retries)
+        self.disable_wheel_event(novel_ssl_retries)
+
         novel_missing = QComboBox()
         novel_missing.addItem(_('Stop, so a resume asks again'), 'stop')
         novel_missing.addItem(_('Skip them and go on'), 'continue')
@@ -1742,6 +1753,8 @@ class TranslationSetting(QDialog):
                 'novel_reply_max_tokens', 16384) or 0))
             novel_rate_limit.setValue(int(self.config.get(
                 'novel_rate_limit_max_wait', 600) or 0))
+            novel_ssl_retries.setValue(int(self.config.get(
+                'novel_ssl_retry_max', 5)))
             idx = novel_missing.findData(self.config.get(
                 'novel_on_missing_paragraphs', 'stop') or 'stop')
             if idx >= 0:
@@ -1864,6 +1877,8 @@ class TranslationSetting(QDialog):
                 novel_on_missing_paragraphs=novel_missing.currentData()))
         novel_rate_limit.valueChanged.connect(
             _persist_novel('novel_rate_limit_max_wait', int))
+        novel_ssl_retries.valueChanged.connect(
+            _persist_novel('novel_ssl_retry_max', int))
         novel_reply_max.valueChanged.connect(
             _persist_novel('novel_reply_max_tokens', int))
         novel_context_reasoning.toggled.connect(

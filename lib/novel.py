@@ -1845,6 +1845,42 @@ def is_rate_limited(error):
         or 'too many requests' in text
 
 
+def is_ssl_error(error):
+    """Whether the failure is a transport-level TLS/SSL break (bad
+    record MAC, unexpected EOF, handshake reset) rather than a logical
+    HTTP error. These come from middleboxes or CDN blocks, and a simple
+    fresh reconnect often succeeds: retry them on their own budget
+    separately from model- or rate-level attempts."""
+    text = str(error).lower()
+    markers = (
+        'bad record mac',
+        'sslv3',
+        'tlsv1 alert',
+        'unexpected eof',
+        'unexpected_eof',
+        'eof occurred in violation of protocol',
+        'connection reset by peer',
+        'connection aborted',
+    )
+    if any(m in text for m in markers):
+        return True
+    # Walk the exception chain: URLError wrapping SSLError etc.
+    cause = getattr(error, 'cause', None) or getattr(error, 'reason', None)
+    seen = {id(error)}
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        try:
+            import ssl as _ssl
+            if isinstance(cause, _ssl.SSLError):
+                return True
+        except Exception:
+            pass
+        if 'ssl' in type(cause).__name__.lower():
+            return True
+        cause = getattr(cause, 'cause', None) or getattr(cause, 'reason', None)
+    return False
+
+
 def is_routing_dead_end(error):
     """Whether OpenRouter found no provider taking every parameter."""
     http = _http_error(error)
@@ -3291,6 +3327,16 @@ class NovelTranslator:
         return max(0, int(self._cfg('novel_rate_limit_max_wait', 600) or 0))
 
     @property
+    def ssl_retry_max(self):
+        """Extra retries for transient TLS connection failures, separate
+        from the normal model request attempt budget."""
+        try:
+            return min(7, max(
+                0, int(self._cfg('novel_ssl_retry_max', 5) or 0)))
+        except (TypeError, ValueError):
+            return 5
+
+    @property
     def on_missing_paragraphs(self):
         """What to do with paragraphs the model never returned, once the
         retries inside a chunk and one more pass in smaller chunks have
@@ -3723,9 +3769,11 @@ class NovelTranslator:
         """
         attempts = attempts or getattr(
             self.translator, 'request_attempt', 3) or 3
+        ssl_retry_max = self.ssl_retry_max
         label = label or _('request')
         last_error = None
         attempt = 0
+        ssl_retries = 0
         # Seconds spent waiting out rate limits so far, and how many
         # times in a row; both bound the patience.
         waited = 0.0
@@ -3789,6 +3837,21 @@ class NovelTranslator:
                         'in {delay}s.').format(
                             label=label, error=describe_error(e),
                             delay=int(delay)), True)
+                    self._wait(delay)
+                    continue
+                # An SSL/TLS break (bad record mac, unexpected EOF,
+                # connection reset) comes from middleboxes/CDN blocks,
+                # not from the model. Retrying with a fresh connection
+                # often succeeds; these do not spend a normal attempt.
+                if is_ssl_error(e) and ssl_retries < ssl_retry_max:
+                    ssl_retries += 1
+                    delay = min(30, 2 ** ssl_retries)
+                    self.log(_(
+                        '{label}: TLS/SSL failure ({error}); fresh '
+                        'connection in {delay}s ({retry}/{max}).').format(
+                            label=label, error=describe_error(e),
+                            delay=int(delay), retry=ssl_retries,
+                            max=ssl_retry_max), True)
                     self._wait(delay)
                     continue
                 attempt += 1

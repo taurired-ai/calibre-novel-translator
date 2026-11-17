@@ -194,6 +194,11 @@ defaults: dict[str, Any] = {
     #   'continue' -> log them and go on to the next chapter; they keep
     #                 their source text and nothing comes back for them.
     'novel_on_missing_paragraphs': 'stop',
+    # Retries for transport-level SSL/TLS failures (bad record mac,
+    # unexpected EOF, connection reset during handshake) do not consume
+    # the normal attempt counter: a fresh connection often succeeds when
+    # an intermediate router or CDN block intermittently disrupts HTTPS.
+    'novel_ssl_retry_max': 5,
     # How long a rate-limited request may be waited out, in seconds,
     # before it counts as a failure. A 429 says "not now", not
     # "never": the attempts used to be spent in a second on a provider

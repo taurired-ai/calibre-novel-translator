@@ -59,6 +59,40 @@ from .text_view import EnterFilter, TranslationText
 load_translations()  # type: ignore
 
 
+def glossary_csv_entry(header, row):
+    """Read one glossary CSV row in the legacy four-column or current
+    five-column format. ``count`` is deliberately ignored: it is derived
+    from the current book's cache after import, never persisted."""
+    if not row:
+        return None
+    fields = {
+        name.strip().casefold(): index
+        for index, name in enumerate(header or [])
+    }
+    if {'source', 'translation', 'type', 'notes'} <= fields.keys():
+        def field(name):
+            index = fields[name]
+            return row[index] if index < len(row) else ''
+        source = field('source')
+        translation = field('translation')
+        gtype = field('type')
+        notes = field('notes')
+    else:
+        source = row[0] if len(row) > 0 else ''
+        translation = row[1] if len(row) > 1 else ''
+        gtype = row[2] if len(row) > 2 else ''
+        notes_index = 4 if len(row) >= 5 else 3
+        notes = row[notes_index] if len(row) > notes_index else ''
+    source = (source or '').strip()
+    if not source:
+        return None
+    return source, {
+        'translation': (translation or '').strip(),
+        'type': (gtype or '').strip(),
+        'notes': (notes or '').strip(),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Workers
 # ---------------------------------------------------------------------------
@@ -2079,17 +2113,10 @@ class NovelTranslation(QDialog):
                     reader = csv.reader(fh)
                     header = next(reader, None)
                     for row in reader:
-                        if not row or not (row[0] or '').strip():
-                            continue
-                        source, translation, gtype, count, notes = (
-                            (row[i] if i < len(row) else '')
-                            for i in range(5))
-                        imported[source.strip()] = {
-                            'translation': (translation or '').strip(),
-                            'type': (gtype or '').strip(),
-                            'count': count,  # ignored on save, kept for reference
-                            'notes': (notes or '').strip(),
-                        }
+                        parsed = glossary_csv_entry(header, row)
+                        if parsed is not None:
+                            source, entry = parsed
+                            imported[source] = entry
             else:
                 with open(path, encoding='utf-8') as fh:
                     raw = _json.load(fh)
@@ -2102,7 +2129,9 @@ class NovelTranslation(QDialog):
                                 'translation': (
                                     entry.get('translation') or '').strip(),
                                 'type': (entry.get('type') or '').strip(),
-                                'count': entry.get('count', 0),
+                                # Count is derived from this book's cache;
+                                # an exported value from another book or an
+                                # older cache must never be persisted.
                                 'notes': (entry.get('notes') or '').strip(),
                             }
                 elif isinstance(raw, list):

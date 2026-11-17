@@ -1,4 +1,5 @@
 import json
+import ssl
 import unittest
 from unittest.mock import Mock, patch
 
@@ -6,7 +7,7 @@ from ...lib.exception import (
     HTTPRequestError, UnexpectedResult, TranslationFailed)
 from ...lib.novel import (
     NovelTranslator, ContextManager, describe_error, retry_after,
-    is_rate_limited, is_routing_dead_end)
+    is_rate_limited, is_routing_dead_end, is_ssl_error)
 
 
 RATE_LIMIT_BODY = json.dumps({'error': {
@@ -68,6 +69,15 @@ class TestDescribeError(unittest.TestCase):
         self.assertFalse(is_routing_dead_end(wrapped(
             HTTPRequestError(404, 'Not Found', '{"error": {"message": '
                              '"model not found"}}'))))
+        self.assertTrue(is_ssl_error(ssl.SSLError(
+            1, '[SSL: SSLV3_ALERT_BAD_RECORD_MAC] bad record mac')))
+        self.assertTrue(is_ssl_error(Exception(
+            '<urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING]>')))
+        wrapped_ssl = Exception('urlopen failed')
+        wrapped_ssl.reason = ssl.SSLError(1, 'broken TLS stream')
+        self.assertTrue(is_ssl_error(wrapped_ssl))
+        self.assertFalse(is_ssl_error(Exception('certificate verify failed')))
+        self.assertFalse(is_ssl_error(Exception('boom')))
 
 
 class TestRetryLoop(unittest.TestCase):
@@ -126,6 +136,42 @@ class TestRetryLoop(unittest.TestCase):
         engine = self._engine([wrapped(http)] * 10)
         translator = self._translator(
             engine, {'novel_rate_limit_max_wait': 0})
+        with patch.object(translator, '_wait'):
+            with self.assertRaises(TranslationFailed):
+                translator._translate_with_retry('s', 'u')
+        self.assertEqual(3, engine.translate.call_count)
+
+    def test_ssl_retry_setting_is_bounded(self):
+        self.assertEqual(5, self._translator(
+            self._engine(['done'])).ssl_retry_max)
+        self.assertEqual(0, self._translator(
+            self._engine(['done']), {'novel_ssl_retry_max': -3}).ssl_retry_max)
+        self.assertEqual(7, self._translator(
+            self._engine(['done']), {'novel_ssl_retry_max': 99}).ssl_retry_max)
+
+    def test_ssl_failures_have_their_own_retry_budget(self):
+        failure = ssl.SSLError(
+            1, '[SSL: SSLV3_ALERT_BAD_RECORD_MAC] bad record mac')
+        engine = self._engine([failure] * 5 + ['done'])
+        translator = self._translator(
+            engine, {'novel_ssl_retry_max': 5})
+        waits = []
+        with patch.object(translator, '_wait', side_effect=waits.append):
+            self.assertEqual(
+                'done', translator._translate_with_retry('s', 'u'))
+        self.assertEqual(6, engine.translate.call_count)
+        self.assertEqual([2, 4, 8, 16, 30], waits)
+        logged = ' '.join(
+            c.args[0] for c in translator.log.call_args_list if c.args)
+        self.assertIn('TLS/SSL failure', logged)
+        self.assertNotIn('(attempt 1/3)', logged)
+
+    def test_zero_ssl_retry_budget_uses_normal_attempts(self):
+        failure = ssl.SSLError(
+            1, '[SSL: SSLV3_ALERT_BAD_RECORD_MAC] bad record mac')
+        engine = self._engine([failure] * 3)
+        translator = self._translator(
+            engine, {'novel_ssl_retry_max': 0})
         with patch.object(translator, '_wait'):
             with self.assertRaises(TranslationFailed):
                 translator._translate_with_retry('s', 'u')
