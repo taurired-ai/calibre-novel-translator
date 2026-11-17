@@ -20,7 +20,7 @@ from qt.core import (  # type: ignore
     QListWidgetItem, QTabWidget, QTableWidget, QTableWidgetItem,
     QHeaderView, QStackedWidget, QComboBox, QMessageBox,
     QSizePolicy, QColor, QBrush, QAbstractItemView, QCompleter, QTimer,
-    QApplication, QPalette, QFileDialog)
+    QApplication, QPalette, QFileDialog, QLineEdit)
 from calibre.constants import __version__  # type: ignore
 from calibre.gui2 import I, error_dialog  # type: ignore
 from calibre.utils.localization import _  # type: ignore
@@ -1332,13 +1332,26 @@ class NovelTranslation(QDialog):
 
         # Glossary tab.
         self.glossary_table = QTableWidget()
-        self.glossary_table.setColumnCount(4)
+        self.glossary_table.setColumnCount(5)
         self.glossary_table.setHorizontalHeaderLabels(
-            [_('Source'), _('Translation'), _('Type'), _('Notes')])
+            [_('Source'), _('Translation'), _('Type'), _('Count'),
+             _('Notes')])
         self.glossary_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch)
         self.glossary_table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows)
+        # Clicking a header sorts by that column; Count sorts numerically.
+        # Sorting is hand-rolled in _redraw_glossary_table (sortIndicatorChanged),
+        # the built-in sorter stays off: it would fight the redraw from
+        # _ui_glossary and lose the 'user' row flag.
+        self.glossary_table.setSortingEnabled(False)
+        self.glossary_table.horizontalHeader().setSortIndicatorShown(True)
+        self.glossary_table.horizontalHeader().setSectionsClickable(True)
+        self.glossary_table.horizontalHeader().sortIndicatorChanged.connect(
+            self._redraw_glossary_table)
+        # Default order: Source ascending.
+        self.glossary_table.horizontalHeader().setSortIndicator(
+            0, Qt.AscendingOrder)
         # Editable between runs only (see _set_context_locked). The table
         # is redrawn from scratch every time a chapter completes, and the
         # worker thread keeps its own copy of the glossary that it writes
@@ -1350,6 +1363,22 @@ class NovelTranslation(QDialog):
         self.glossary_table.installEventFilter(
             EnterFilter(self._edit_glossary_entry, self))
         glossary_actions = QHBoxLayout()
+        self.glossary_filter_edit = QLineEdit()
+        self.glossary_filter_edit.setPlaceholderText(
+            _('Filter…'))
+        self.glossary_filter_edit.setClearButtonEnabled(True)
+        self.glossary_filter_edit.setToolTip(_(
+            'Show only entries whose source contains this text '
+            '(case-insensitive).'))
+        self.glossary_filter_edit.setMaximumWidth(260)
+        self.glossary_filter_edit.textChanged.connect(
+            self._redraw_glossary_table)
+        self.glossary_filter_clear = with_icon(
+            QPushButton(_('Clear')), 'edit-clear')
+        self.glossary_filter_clear.setToolTip(_(
+            'Clear the filter text.'))
+        self.glossary_filter_clear.clicked.connect(
+            self.glossary_filter_edit.clear)
         self.glossary_add_button = with_icon(
             QPushButton(_('Add entry')), 'plus')
         self.glossary_add_button.setToolTip(_(
@@ -1383,6 +1412,8 @@ class NovelTranslation(QDialog):
         glossary_actions.addWidget(self.glossary_add_button)
         glossary_actions.addWidget(self.glossary_remove_button)
         glossary_actions.addStretch(1)
+        glossary_actions.addWidget(self.glossary_filter_edit)
+        glossary_actions.addWidget(self.glossary_filter_clear)
         glossary_actions.addWidget(self.glossary_export_button)
         glossary_actions.addWidget(self.glossary_import_button)
         glossary_actions.addWidget(self.reset_context_button)
@@ -1672,25 +1703,73 @@ class NovelTranslation(QDialog):
             if should_close:
                 cache.close()
 
+    def _glossary_counts_from_cache(self):
+        """Scan the cache and count how many times each glossary source
+        appears in the original text. Returns ``{source: count}``.
+        Short sources or common words (length < 4) get exact-case
+        matching; longer ones are case-folded."""
+        counts = {source: 0 for source in self._ui_glossary if source}
+        if not counts:
+            return counts
+        cache = get_cache(self.cache_id)
+        try:
+            for row in cache.all():
+                original = row[3] or ''
+                if not original:
+                    continue
+                lowered = original.casefold()
+                for source in counts:
+                    if len(source) < 4:
+                        # short terms like titles or codes: exact match
+                        counts[source] += original.count(source)
+                    else:
+                        counts[source] += lowered.count(source.casefold())
+        finally:
+            cache.close()
+        return counts
+
     def _redraw_glossary_table(self):
         """Repopulate the glossary QTableWidget from ``self._ui_glossary``.
-        Entries are shown sorted alphabetically by source (case-folded)."""
+        Rows are filtered by ``self.glossary_filter_edit`` and sorted by
+        the column last clicked (Source/Translation/Type/Notes lexically,
+        Count numerically; default: Source ascending)."""
         glossary = self._ui_glossary
+        counts = self._glossary_counts_from_cache()
+        filter_text = self.glossary_filter_edit.text().strip().casefold()
+        # Determine sort column and order from the header.
+        header = self.glossary_table.horizontalHeader()
+        sort_col = header.sortIndicatorSection()
+        sort_order = header.sortIndicatorOrder()  # Qt.Ascending=0, Descending=1
+        reverse = (sort_order == Qt.DescendingOrder)
+
+        def sort_key(source):
+            entry = glossary[source]
+            if sort_col == 0:
+                return (source or '').casefold()
+            elif sort_col == 1:
+                return (entry.get('translation') or '').casefold()
+            elif sort_col == 2:
+                return (entry.get('type') or '').casefold()
+            elif sort_col == 3:
+                return counts.get(source, 0)
+            else:
+                return (entry.get('notes') or '').casefold()
+
+        sources = [s for s in glossary if not filter_text or filter_text in (s or '').casefold()]
+        sources.sort(key=sort_key, reverse=reverse)
+
         self._loading_context = True
         try:
-            sorted_sources = sorted(
-                glossary.keys(), key=lambda s: (s or '').casefold())
-            self.glossary_table.setRowCount(len(sorted_sources))
-            for row, source in enumerate(sorted_sources):
+            self.glossary_table.setRowCount(len(sources))
+            for row, source in enumerate(sources):
                 entry = glossary[source]
-                self.glossary_table.setItem(
-                    row, 0, QTableWidgetItem(source))
-                self.glossary_table.setItem(
-                    row, 1, QTableWidgetItem(entry.get('translation', '')))
-                self.glossary_table.setItem(
-                    row, 2, QTableWidgetItem(entry.get('type', '')))
-                self.glossary_table.setItem(
-                    row, 3, QTableWidgetItem(entry.get('notes', '')))
+                self.glossary_table.setItem(row, 0, QTableWidgetItem(source))
+                self.glossary_table.setItem(row, 1, QTableWidgetItem(entry.get('translation', '')))
+                self.glossary_table.setItem(row, 2, QTableWidgetItem(entry.get('type', '')))
+                count_item = QTableWidgetItem(str(counts.get(source, 0)))
+                count_item.setData(Qt.UserRole, counts.get(source, 0))  # for numeric sort
+                self.glossary_table.setItem(row, 3, count_item)
+                self.glossary_table.setItem(row, 4, QTableWidgetItem(entry.get('notes', '')))
                 if entry.get('user'):
                     self._mark_user_row(row)
         finally:
@@ -1839,19 +1918,23 @@ class NovelTranslation(QDialog):
     def _table_glossary(self):
         """The glossary the table shows. A row without a name or a
         translation is left out until it has both; of two rows with the
-        same name, the lower one counts."""
+        same name, the lower one counts. The Count column is a display
+        value computed from the cache -- it is read back as zero because
+        saving happens through the first four editable columns plus the
+        user flag."""
         glossary = {}
         table = self.glossary_table
         for row in range(table.rowCount()):
-            cells = [table.item(row, column) for column in range(4)]
-            source, translation, gtype, notes = [
+            cells = [table.item(row, column) for column in range(1, 5)]
+            source_item = table.item(row, 0)
+            source, translation, gtype, _count, notes = [
                 item.text().strip() if item is not None else ''
-                for item in cells]
+                for item in [source_item] + cells]
             if not source or not translation:
                 continue
             entry = {'translation': translation, 'type': gtype,
                      'notes': notes}
-            if cells[0].data(Qt.UserRole):
+            if source_item.data(Qt.UserRole):
                 entry['user'] = True
             glossary.pop(source, None)
             glossary[source] = entry
@@ -1932,19 +2015,38 @@ class NovelTranslation(QDialog):
                 import csv
                 with open(path, 'w', newline='', encoding='utf-8') as fh:
                     writer = csv.writer(fh)
-                    writer.writerow(['source', 'translation', 'type', 'notes'])
-                    for source in sorted(
-                            glossary, key=lambda s: (s or '').casefold()):
+                    writer.writerow(['source', 'translation', 'type', 'count', 'notes'])
+                    counts = self._glossary_counts_from_cache()
+                    # Export honors the current sort column/order from UI
+                    header = self.glossary_table.horizontalHeader()
+                    sort_col = header.sortIndicatorSection()
+                    sort_order = header.sortIndicatorOrder()
+                    reverse = (sort_order == Qt.DescendingOrder)
+                    def sort_key(s):
+                        e = glossary[s]
+                        if sort_col == 0: return (s or '').casefold()
+                        elif sort_col == 1: return (e.get('translation') or '').casefold()
+                        elif sort_col == 2: return (e.get('type') or '').casefold()
+                        elif sort_col == 3: return counts.get(s, 0)
+                        else: return (e.get('notes') or '').casefold()
+                    for source in sorted(glossary.keys(), key=sort_key, reverse=reverse):
                         entry = glossary[source]
                         writer.writerow([
                             source,
                             entry.get('translation', ''),
                             entry.get('type', ''),
+                            counts.get(source, 0),
                             entry.get('notes', ''),
                         ])
             else:
+                counts = self._glossary_counts_from_cache()
+                out = {}
+                for source in sorted(glossary.keys(), key=lambda s: (s or '').casefold()):
+                    entry = dict(glossary[source])
+                    entry['count'] = counts.get(source, 0)
+                    out[source] = entry
                 with open(path, 'w', encoding='utf-8') as fh:
-                    _json.dump(glossary, fh, ensure_ascii=False, indent=2)
+                    _json.dump(out, fh, ensure_ascii=False, indent=2)
         except Exception as exc:
             error_dialog(self, _('Export glossary'),
                          _('Could not save the glossary: %s') % exc)
@@ -1969,12 +2071,13 @@ class NovelTranslation(QDialog):
                     for row in reader:
                         if not row or not (row[0] or '').strip():
                             continue
-                        source, translation, gtype, notes = (
+                        source, translation, gtype, count, notes = (
                             (row[i] if i < len(row) else '')
-                            for i in range(4))
+                            for i in range(5))
                         imported[source.strip()] = {
                             'translation': (translation or '').strip(),
                             'type': (gtype or '').strip(),
+                            'count': count,  # ignored on save, kept for reference
                             'notes': (notes or '').strip(),
                         }
             else:
@@ -1989,6 +2092,7 @@ class NovelTranslation(QDialog):
                                 'translation': (
                                     entry.get('translation') or '').strip(),
                                 'type': (entry.get('type') or '').strip(),
+                                'count': entry.get('count', 0),
                                 'notes': (entry.get('notes') or '').strip(),
                             }
                 elif isinstance(raw, list):

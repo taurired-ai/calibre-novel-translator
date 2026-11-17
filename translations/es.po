@@ -2460,3 +2460,18 @@ msgstr ""
 #: ui.py:151
 msgid "Cache Manager"
 msgstr "Administrador de caché"
+msgid "Filter…"
+msgstr "Filtrar…"
+
+msgid "Count"
+msgstr "Recuento"
+
+msgid "Clear"
+msgstr "Limpiar"
+
+msgid "Export…"
+msgstr "Exportar…"
+
+msgid "Import…"
+msgstr "Importar…"
+

@@ -2452,3 +2452,18 @@ msgstr "无法在进行翻译时管理缓存。"
 #: ui.py:151
 msgid "Cache Manager"
 msgstr "缓存管理器"
+msgid "Filter…"
+msgstr "筛选…"
+
+msgid "Count"
+msgstr "出现次数"
+
+msgid "Clear"
+msgstr "清除"
+
+msgid "Export…"
+msgstr "导出…"
+
+msgid "Import…"
+msgstr "导入…"
+

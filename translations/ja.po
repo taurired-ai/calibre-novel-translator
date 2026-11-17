@@ -2452,3 +2452,18 @@ msgstr "本の翻訳中はキャッシュを管理できません。"
 #: ui.py:151
 msgid "Cache Manager"
 msgstr "キャッシュマネージャー"
+msgid "Filter…"
+msgstr "絞り込み…"
+
+msgid "Count"
+msgstr "出現回数"
+
+msgid "Clear"
+msgstr "クリア"
+
+msgid "Export…"
+msgstr "エクスポート…"
+
+msgid "Import…"
+msgstr "インポート…"
+

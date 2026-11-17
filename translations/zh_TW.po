@@ -2452,3 +2452,18 @@ msgstr ""
 #: ui.py:151
 msgid "Cache Manager"
 msgstr ""
+msgid "Filter…"
+msgstr "篩選…"
+
+msgid "Count"
+msgstr "出現次數"
+
+msgid "Clear"
+msgstr "清除"
+
+msgid "Export…"
+msgstr "匯出…"
+
+msgid "Import…"
+msgstr "匯入…"
+

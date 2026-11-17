@@ -2454,3 +2454,18 @@ msgstr "Kitap(lar) çeviri aşamasındayken önbellek yönetilemiyor."
 #: ui.py:151
 msgid "Cache Manager"
 msgstr "Önbellek Yöneticisi"
+msgid "Filter…"
+msgstr "Filtre…"
+
+msgid "Count"
+msgstr "Sayaç"
+
+msgid "Clear"
+msgstr "Temizle"
+
+msgid "Export…"
+msgstr "Dışa Aktar…"
+
+msgid "Import…"
+msgstr "İçe Aktar…"
+
