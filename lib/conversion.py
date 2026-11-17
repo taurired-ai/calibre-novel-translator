@@ -372,7 +372,7 @@ class ConversionWorker:
             Dispatcher(self.translate_done),
             'arbitrary_n',
             args=(
-                'calibre_plugins.novel_translator.lib.conversion',
+                'calibre_plugins.novel_translator_tauri.lib.conversion',
                 'convert_item',
                 (ebook.title, input_path, output_path, ebook.source_lang,
                  ebook.target_lang, cache_only, ebook.input_format,

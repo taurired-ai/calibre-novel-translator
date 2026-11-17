@@ -1,5 +1,5 @@
 from qt.core import QWidget, QHBoxLayout, QLabel  # type: ignore
-from calibre_plugins.novel_translator import NovelTranslatorPlugin  # type: ignore
+from calibre_plugins.novel_translator_tauri import NovelTranslatorPlugin  # type: ignore
 
 from .style import SPACING, secondary
 

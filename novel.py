@@ -8,6 +8,7 @@ dynamic glossary, the forms of address, the author brief and the log.
 """
 import time
 import traceback
+import json as _json
 from html import escape
 from types import MethodType
 
@@ -19,7 +20,7 @@ from qt.core import (  # type: ignore
     QListWidgetItem, QTabWidget, QTableWidget, QTableWidgetItem,
     QHeaderView, QStackedWidget, QComboBox, QMessageBox,
     QSizePolicy, QColor, QBrush, QAbstractItemView, QCompleter, QTimer,
-    QApplication, QPalette)
+    QApplication, QPalette, QFileDialog)
 from calibre.constants import __version__  # type: ignore
 from calibre.gui2 import I, error_dialog  # type: ignore
 from calibre.utils.localization import _  # type: ignore
@@ -1366,9 +1367,24 @@ class NovelTranslation(QDialog):
         self.reset_context_button = with_icon(
             QPushButton(_('Reset context')), 'edit-clear')
         self.reset_context_button.clicked.connect(self._reset_context)
+        self.glossary_export_button = with_icon(
+            QPushButton(_('Export…')), 'document-save')
+        self.glossary_export_button.setToolTip(_(
+            'Save the glossary to a JSON or CSV file.'))
+        self.glossary_export_button.clicked.connect(
+            self._export_glossary)
+        self.glossary_import_button = with_icon(
+            QPushButton(_('Import…')), 'document-open')
+        self.glossary_import_button.setToolTip(_(
+            'Load glossary entries from a JSON or CSV file. '
+            'Existing entries with the same source are overwritten.'))
+        self.glossary_import_button.clicked.connect(
+            self._import_glossary)
         glossary_actions.addWidget(self.glossary_add_button)
         glossary_actions.addWidget(self.glossary_remove_button)
         glossary_actions.addStretch(1)
+        glossary_actions.addWidget(self.glossary_export_button)
+        glossary_actions.addWidget(self.glossary_import_button)
         glossary_actions.addWidget(self.reset_context_button)
         glossary_wrap = QWidget()
         glossary_wrap_layout = QVBoxLayout(glossary_wrap)
@@ -1657,12 +1673,16 @@ class NovelTranslation(QDialog):
                 cache.close()
 
     def _redraw_glossary_table(self):
-        """Repopulate the glossary QTableWidget from ``self._ui_glossary``."""
+        """Repopulate the glossary QTableWidget from ``self._ui_glossary``.
+        Entries are shown sorted alphabetically by source (case-folded)."""
         glossary = self._ui_glossary
         self._loading_context = True
         try:
-            self.glossary_table.setRowCount(len(glossary))
-            for row, (source, entry) in enumerate(glossary.items()):
+            sorted_sources = sorted(
+                glossary.keys(), key=lambda s: (s or '').casefold())
+            self.glossary_table.setRowCount(len(sorted_sources))
+            for row, source in enumerate(sorted_sources):
+                entry = glossary[source]
                 self.glossary_table.setItem(
                     row, 0, QTableWidgetItem(source))
                 self.glossary_table.setItem(
@@ -1890,6 +1910,121 @@ class NovelTranslation(QDialog):
             self._loading_context = False
         if self._save_glossary():
             self._context_edited()
+
+    def _export_glossary(self):
+        """Write the current glossary to a JSON or CSV file chosen by the
+        user.  The JSON schema is the same mapping used internally:
+        ``{source: {translation, type, notes}}``.  The CSV layout is a
+        header plus rows of ``source, translation, type, notes``."""
+        glossary = self._ui_glossary
+        if not glossary:
+            QMessageBox.information(
+                self, _('Export glossary'),
+                _('The glossary is empty: nothing to save.'))
+            return
+        path = QFileDialog.getSaveFileName(
+            self, _('Export glossary'), '',
+            _('Glossary files') + ' (*.json *.csv);;JSON (*.json);;CSV (*.csv)')[0]
+        if not path:
+            return
+        try:
+            if path.lower().endswith('.csv'):
+                import csv
+                with open(path, 'w', newline='', encoding='utf-8') as fh:
+                    writer = csv.writer(fh)
+                    writer.writerow(['source', 'translation', 'type', 'notes'])
+                    for source in sorted(
+                            glossary, key=lambda s: (s or '').casefold()):
+                        entry = glossary[source]
+                        writer.writerow([
+                            source,
+                            entry.get('translation', ''),
+                            entry.get('type', ''),
+                            entry.get('notes', ''),
+                        ])
+            else:
+                with open(path, 'w', encoding='utf-8') as fh:
+                    _json.dump(glossary, fh, ensure_ascii=False, indent=2)
+        except Exception as exc:
+            error_dialog(self, _('Export glossary'),
+                         _('Could not save the glossary: %s') % exc)
+            return
+
+    def _import_glossary(self):
+        """Load glossary entries from a JSON or CSV file and merge them
+        into the current glossary.  Entries with the same source replace
+        the existing ones; the rest are kept."""
+        path = QFileDialog.getOpenFileName(
+            self, _('Import glossary'), '',
+            _('Glossary files') + ' (*.json *.csv);;JSON (*.json);;CSV (*.csv)')[0]
+        if not path:
+            return
+        try:
+            imported = {}
+            if path.lower().endswith('.csv'):
+                import csv
+                with open(path, newline='', encoding='utf-8') as fh:
+                    reader = csv.reader(fh)
+                    header = next(reader, None)
+                    for row in reader:
+                        if not row or not (row[0] or '').strip():
+                            continue
+                        source, translation, gtype, notes = (
+                            (row[i] if i < len(row) else '')
+                            for i in range(4))
+                        imported[source.strip()] = {
+                            'translation': (translation or '').strip(),
+                            'type': (gtype or '').strip(),
+                            'notes': (notes or '').strip(),
+                        }
+            else:
+                with open(path, encoding='utf-8') as fh:
+                    raw = _json.load(fh)
+                if isinstance(raw, dict):
+                    for source, entry in raw.items():
+                        if isinstance(entry, str):
+                            imported[source] = {'translation': entry}
+                        elif isinstance(entry, dict):
+                            imported[source] = {
+                                'translation': (
+                                    entry.get('translation') or '').strip(),
+                                'type': (entry.get('type') or '').strip(),
+                                'notes': (entry.get('notes') or '').strip(),
+                            }
+                elif isinstance(raw, list):
+                    for item in raw:
+                        if not isinstance(item, dict):
+                            continue
+                        source = (item.get('source') or '').strip()
+                        if source:
+                            imported[source] = {
+                                'translation': (
+                                    item.get('translation') or '').strip(),
+                                'type': (item.get('type') or '').strip(),
+                                'notes': (item.get('notes') or '').strip(),
+                            }
+        except Exception as exc:
+            error_dialog(self, _('Import glossary'),
+                         _('Could not load the glossary: %s') % exc)
+            return
+        if not imported:
+            QMessageBox.warning(self, _('Import glossary'),
+                                _('The file held no usable entries.'))
+            return
+        glossary = dict(self._ui_glossary)
+        for source, entry in imported.items():
+            if entry.get('translation'):
+                entry['user'] = True
+                glossary[source] = entry
+        self._ui_glossary = glossary
+        self._refresh_context_views()
+        cache = get_cache(self.cache_id)
+        try:
+            ContextManager(cache).load().replace_glossary(
+                self._clean_glossary(glossary))
+        finally:
+            cache.close()
+        self._context_edited()
 
     @staticmethod
     def _clean_address(address):
