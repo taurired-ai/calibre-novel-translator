@@ -1066,6 +1066,12 @@ class NovelTranslation(QDialog):
         # paragraph is translated yet decides whether an edit is worth a
         # warning. It is looked up once, and again after a run.
         self._loading_context = False
+        # Glossary/address state belongs to the dialog itself, not to its
+        # later-loading cache view. Signals on the tables below may redraw
+        # while the GUI is still being constructed (e.g. setSortIndicator),
+        # so these attributes must exist before any widget/signal setup.
+        self._ui_glossary = {}
+        self._ui_address = None
         self._stored_style = ''
         self._started = None   # not looked up yet
 
@@ -1527,13 +1533,12 @@ class NovelTranslation(QDialog):
         btn_row.addWidget(self.close_button)
         outer.addLayout(btn_row)
 
-        # In-memory glossary accumulator. Updated incrementally from the
-        # chapter_done signal so the UI never needs to read back from SQLite
-        # (which can miss in-flight transactions from the worker thread).
-        self._ui_glossary = {}
-        # The forms of address, as the worker last sent them; None until
-        # read from the cache.
-        self._ui_address = None
+        # The in-memory glossary/address accumulators initialized in the
+        # constructor are intentionally not reassigned here: creating the
+        # widgets above connects signals which may redraw the tables during
+        # setup.  Replacing the dict after the redraw works, but replacing
+        # the attribute after a signal fired before initialization used to
+        # be impossible.  Keep one object identity through dialog setup.
 
         self.text_view.bind_chapter_list(self.chapter_list)
         self._set_context_locked(False)
@@ -1708,7 +1713,8 @@ class NovelTranslation(QDialog):
         appears in the original text. Returns ``{source: count}``.
         Short sources or common words (length < 4) get exact-case
         matching; longer ones are case-folded."""
-        counts = {source: 0 for source in self._ui_glossary if source}
+        glossary = getattr(self, '_ui_glossary', {})
+        counts = {source: 0 for source in glossary if source}
         if not counts:
             return counts
         cache = get_cache(self.cache_id)
@@ -1733,9 +1739,13 @@ class NovelTranslation(QDialog):
         Rows are filtered by ``self.glossary_filter_edit`` and sorted by
         the column last clicked (Source/Translation/Type/Notes lexically,
         Count numerically; default: Source ascending)."""
-        glossary = self._ui_glossary
+        glossary = getattr(self, '_ui_glossary', {})
+        if not isinstance(glossary, dict):
+            glossary = {}
         counts = self._glossary_counts_from_cache()
-        filter_text = self.glossary_filter_edit.text().strip().casefold()
+        filter_edit = getattr(self, 'glossary_filter_edit', None)
+        filter_text = (filter_edit.text() if filter_edit is not None else '')\
+            .strip().casefold()
         # Determine sort column and order from the header.
         header = self.glossary_table.horizontalHeader()
         sort_col = header.sortIndicatorSection()

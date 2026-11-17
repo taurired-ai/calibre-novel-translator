@@ -31,7 +31,7 @@ class NovelTranslatorPlugin(InterfaceActionBase):
     supported_platforms = ['windows', 'osx', 'linux']
     identifier = 'novel-translator-tauri'
     author = 'itotm, taurired-ai (fork)'
-    version = (1, 3, 5, 4)
+    version = (1, 3, 5, 5)
     __version__ = 'v' + '.'.join(map(str, version))
     description = _(
         'Translate a novel with a language model, chapter by chapter, '
